@@ -1,5 +1,6 @@
 from __future__ import annotations
 import io, re, json
+# Render redeploy marker: keep the production service aligned with main.
 from html import unescape
 from urllib.request import Request as UrlRequest, urlopen
 from pathlib import Path
