@@ -1,5 +1,7 @@
 from __future__ import annotations
-import io, re
+import io, re, json
+from html import unescape
+from urllib.request import Request, urlopen
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, Request, HTTPException
@@ -43,6 +45,25 @@ def timestamp(sec: float) -> str:
     total = int(sec); h, rem = divmod(total, 3600); m, s = divmod(rem, 60)
     return f'{h:02d}:{m:02d}:{s:02d}'
 
+def direct_caption_fallback(vid: str, language: str):
+    request = Request(f'https://www.youtube.com/watch?v={vid}', headers={'User-Agent': 'Mozilla/5.0'})
+    page = urlopen(request, timeout=12).read().decode('utf-8', 'ignore')
+    match = re.search(r'"captionTracks":(\[.*?\])', page)
+    if not match: raise RuntimeError('No captionTracks in player response')
+    tracks = json.loads(match.group(1).replace('\\u0026', '&'))
+    if language == 'auto':
+        track = next((t for t in tracks if t.get('languageCode') in ('en', 'zh-Hans', 'zh-Hant')), tracks[0])
+    else:
+        track = next((t for t in tracks if t.get('languageCode') == language), None)
+        if track is None: raise RuntimeError('Requested language track is unavailable')
+    xml = urlopen(Request(track['baseUrl'], headers={'User-Agent': 'Mozilla/5.0'}), timeout=12).read().decode('utf-8', 'ignore')
+    items = []
+    for start, duration, text in re.findall(r'<text start="([^"]+)"(?: dur="([^"]+)")?>(.*?)</text>', xml, re.S):
+        text = re.sub(r'<[^>]+>', '', unescape(text)).replace('&#39;', "'").strip()
+        if text: items.append({'text': text, 'start': float(start), 'duration': float(duration or 0)})
+    if not items: raise RuntimeError('Caption XML was empty')
+    return items, track.get('languageCode', language), [t.get('languageCode') for t in tracks]
+
 def get_items(vid: str, language: str):
     if not YouTubeTranscriptApi: raise HTTPException(503, 'Transcript dependency is unavailable. Run install.ps1.')
     try:
@@ -62,7 +83,10 @@ def get_items(vid: str, language: str):
             fetched = api.fetch(vid, languages=[language] if language != 'auto' else ['en', 'zh-Hans', 'zh-Hant'])
             return [{'text': x.text, 'start': x.start, 'duration': x.duration} for x in fetched], getattr(fetched, 'language_code', language), []
         except Exception:
-            raise HTTPException(404, 'No accessible transcript was found. Check the URL, captions, or try an authorised local audio file.')
+            try:
+                return direct_caption_fallback(vid, language)
+            except Exception:
+                raise HTTPException(404, 'No accessible transcript was found. Check the URL, captions, or try an authorised local audio file.')
 
 @app.post('/api/extract')
 def extract(req: ExtractRequest):
