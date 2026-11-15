@@ -1,7 +1,7 @@
 from __future__ import annotations
 import io, re, json
 from html import unescape
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, Request, HTTPException
@@ -46,7 +46,7 @@ def timestamp(sec: float) -> str:
     return f'{h:02d}:{m:02d}:{s:02d}'
 
 def direct_caption_fallback(vid: str, language: str):
-    request = Request(f'https://www.youtube.com/watch?v={vid}', headers={'User-Agent': 'Mozilla/5.0'})
+    request = UrlRequest(f'https://www.youtube.com/watch?v={vid}', headers={'User-Agent': 'Mozilla/5.0'})
     page = urlopen(request, timeout=12).read().decode('utf-8', 'ignore')
     match = re.search(r'"captionTracks":(\[.*?\])', page)
     if not match: raise RuntimeError('No captionTracks in player response')
@@ -56,7 +56,7 @@ def direct_caption_fallback(vid: str, language: str):
     else:
         track = next((t for t in tracks if t.get('languageCode') == language), None)
         if track is None: raise RuntimeError('Requested language track is unavailable')
-    xml = urlopen(Request(track['baseUrl'], headers={'User-Agent': 'Mozilla/5.0'}), timeout=12).read().decode('utf-8', 'ignore')
+    xml = urlopen(UrlRequest(track['baseUrl'], headers={'User-Agent': 'Mozilla/5.0'}), timeout=12).read().decode('utf-8', 'ignore')
     items = []
     for start, duration, text in re.findall(r'<text start="([^"]+)"(?: dur="([^"]+)")?>(.*?)</text>', xml, re.S):
         text = re.sub(r'<[^>]+>', '', unescape(text)).replace('&#39;', "'").strip()
