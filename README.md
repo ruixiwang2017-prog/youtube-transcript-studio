@@ -17,6 +17,14 @@ The included `Dockerfile` builds the React frontend and serves it through FastAP
 
 The service does not need a ChatGPT API key. The optional Whisper feature remains disabled unless its extra dependency is installed.
 
+## Recommended production architecture
+
+For reliable YouTube access, run the FastAPI backend on Render and the Vite frontend on Vercel. Set `VITE_API_BASE` in the Vercel production environment to the Render service URL, then redeploy the frontend.
+
+## Publish with Vercel
+
+The project includes `vercel.json` and `api/index.py` for Vercel's Vite + FastAPI deployment. Install the Vercel CLI, run `vercel login`, then run `vercel --prod` from the project root.
+
 ## Optional speech recognition
 
 Install `faster-whisper` separately, then use the authorised local-audio endpoint exposed by the backend. No YouTube audio is downloaded automatically.
