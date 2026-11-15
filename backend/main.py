@@ -47,17 +47,20 @@ def get_items(vid: str, language: str):
     if not YouTubeTranscriptApi: raise HTTPException(503, 'Transcript dependency is unavailable. Run install.ps1.')
     try:
         api = YouTubeTranscriptApi()
-        fetched = api.fetch(vid, languages=None if language == 'auto' else [language])
-        return [{'text': x.text, 'start': x.start, 'duration': x.duration} for x in fetched], getattr(fetched, 'language_code', language if language != 'auto' else 'auto'), []
-    except Exception as first:
+        tracks = list(api.list(vid))
+        if not tracks: raise RuntimeError('No caption tracks')
+        if language == 'auto':
+            preferred = next((t for t in tracks if t.language_code in ('en', 'zh-Hans', 'zh-Hant')), tracks[0])
+        else:
+            preferred = next((t for t in tracks if t.language_code == language), None)
+            if preferred is None: raise RuntimeError('Requested language is unavailable')
+        fetched = preferred.fetch()
+        return [{'text': x.text, 'start': x.start, 'duration': x.duration} for x in fetched], preferred.language_code, [t.language_code for t in tracks]
+    except Exception:
         try:
             api = YouTubeTranscriptApi()
-            listing = api.list(vid)
-            tracks = list(listing)
-            if not tracks: raise first
-            preferred = next((t for t in tracks if language != 'auto' and t.language_code == language), tracks[0])
-            fetched = preferred.fetch()
-            return [{'text': x.text, 'start': x.start, 'duration': x.duration} for x in fetched], preferred.language_code, [t.language_code for t in tracks]
+            fetched = api.fetch(vid, languages=[language] if language != 'auto' else ['en', 'zh-Hans', 'zh-Hant'])
+            return [{'text': x.text, 'start': x.start, 'duration': x.duration} for x in fetched], getattr(fetched, 'language_code', language), []
         except Exception:
             raise HTTPException(404, 'No accessible transcript was found. Check the URL, captions, or try an authorised local audio file.')
 
