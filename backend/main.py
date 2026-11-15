@@ -14,6 +14,10 @@ try:
     from youtube_transcript_api import YouTubeTranscriptApi
 except Exception:
     YouTubeTranscriptApi = None
+try:
+    import yt_dlp
+except Exception:
+    yt_dlp = None
 
 app = FastAPI(title='YouTube Transcript Studio', version='1.0.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
@@ -64,6 +68,28 @@ def direct_caption_fallback(vid: str, language: str):
     if not items: raise RuntimeError('Caption XML was empty')
     return items, track.get('languageCode', language), [t.get('languageCode') for t in tracks]
 
+def ytdlp_caption_fallback(vid: str, language: str):
+    if not yt_dlp: raise RuntimeError('yt-dlp is unavailable')
+    with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True, 'noplaylist': True}) as ydl:
+        info = ydl.extract_info(f'https://www.youtube.com/watch?v={vid}', download=False)
+    tracks = info.get('subtitles') or info.get('automatic_captions') or {}
+    keys = list(tracks)
+    if not keys: raise RuntimeError('No yt-dlp captions')
+    key = language if language != 'auto' and language in tracks else next((k for k in ('en', 'zh-Hans', 'zh-Hant', 'zh-CN', 'zh-TW') if k in tracks), keys[0])
+    choices = sorted(tracks[key], key=lambda x: (x.get('ext') not in ('vtt', 'srv3', 'json3'), x.get('ext', '')))
+    sub = urlopen(UrlRequest(choices[0]['url'], headers={'User-Agent': 'Mozilla/5.0'}), timeout=20).read().decode('utf-8', 'ignore')
+    items = []
+    for block in re.split(r'\n\s*\n', sub):
+        m = re.search(r'(\d{2}:\d{2}:\d{2}\.\d+)\s+-->\s+(\d{2}:\d{2}:\d{2}\.\d+)', block)
+        if not m: continue
+        text = re.sub(r'<[^>]+>', '', '\n'.join(block.splitlines()[2:])).strip()
+        if text:
+            def sec(v):
+                h,mn,s=v.split(':'); return int(h)*3600+int(mn)*60+float(s)
+            start,end=sec(m.group(1)),sec(m.group(2)); items.append({'text':unescape(text), 'start':start, 'duration':end-start})
+    if not items: raise RuntimeError('yt-dlp subtitle was empty')
+    return items, key, keys
+
 def get_items(vid: str, language: str):
     if not YouTubeTranscriptApi: raise HTTPException(503, 'Transcript dependency is unavailable. Run install.ps1.')
     try:
@@ -86,7 +112,10 @@ def get_items(vid: str, language: str):
             try:
                 return direct_caption_fallback(vid, language)
             except Exception:
-                raise HTTPException(404, 'No accessible transcript was found. Check the URL, captions, or try an authorised local audio file.')
+                try:
+                    return ytdlp_caption_fallback(vid, language)
+                except Exception:
+                    raise HTTPException(404, 'No accessible transcript was found. Check the URL, captions, or try an authorised local audio file.')
 
 @app.post('/api/extract')
 def extract(req: ExtractRequest):
