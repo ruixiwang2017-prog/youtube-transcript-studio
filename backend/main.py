@@ -3,6 +3,7 @@ import io, re, json
 # Render redeploy marker: keep the production service aligned with main.
 from html import unescape
 from urllib.request import Request as UrlRequest, urlopen
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, Request, HTTPException
@@ -100,6 +101,39 @@ def ytdlp_caption_fallback(vid: str, language: str):
     if not items: raise RuntimeError('yt-dlp subtitle was empty')
     return items, key, keys
 
+def invidious_caption_fallback(vid: str, language: str):
+    """Use a public Invidious captions endpoint when YouTube blocks cloud IPs."""
+    instances = ('https://yt.chocolatemoo53.com', 'https://inv.nadeko.net', 'https://invidious.nerdvpn.de')
+    last_error = None
+    for base in instances:
+        try:
+            listing = json.loads(urlopen(UrlRequest(f'{base}/api/v1/captions/{vid}', headers={'User-Agent': 'Mozilla/5.0'}), timeout=15).read().decode('utf-8'))
+            captions = listing.get('captions') or []
+            if language != 'auto':
+                captions = [c for c in captions if c.get('languageCode') == language]
+            else:
+                captions.sort(key=lambda c: (c.get('languageCode') not in ('en', 'zh-Hans', 'zh-Hant'), c.get('languageCode', '')))
+            if not captions: raise RuntimeError('No Invidious caption tracks')
+            track = captions[0]
+            label = quote(track.get('label', ''))
+            raw = urlopen(UrlRequest(f"{base}{track['url']}&fmt=vtt" if '?' in track['url'] else f"{base}{track['url']}?fmt=vtt", headers={'User-Agent': 'Mozilla/5.0'}), timeout=20).read().decode('utf-8', 'ignore')
+            items = []
+            for block in re.split(r'\n\s*\n', raw):
+                m = re.search(r'(\d{2}:\d{2}:\d{2}\.\d+)\s+-->\s+(\d{2}:\d{2}:\d{2}\.\d+)', block)
+                if not m: continue
+                lines = [re.sub(r'<[^>]+>', '', x).strip() for x in block.splitlines()[2:] if x.strip()]
+                text = ' '.join(lines)
+                if text:
+                    def sec(v):
+                        h, mn, s = v.split(':'); return int(h) * 3600 + int(mn) * 60 + float(s)
+                    start, end = sec(m.group(1)), sec(m.group(2))
+                    items.append({'text': unescape(text), 'start': start, 'duration': end - start})
+            if items: return items, track.get('languageCode', language), [c.get('languageCode') for c in listing.get('captions', [])]
+            raise RuntimeError('Empty Invidious VTT')
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f'Invidious fallback failed: {last_error}')
+
 def get_items(vid: str, language: str):
     if not YouTubeTranscriptApi: raise HTTPException(503, 'Transcript dependency is unavailable. Run install.ps1.')
     try:
@@ -120,12 +154,15 @@ def get_items(vid: str, language: str):
             return [{'text': x.text, 'start': x.start, 'duration': x.duration} for x in fetched], getattr(fetched, 'language_code', language), []
         except Exception:
             try:
-                return direct_caption_fallback(vid, language)
+                return invidious_caption_fallback(vid, language)
             except Exception:
                 try:
-                    return ytdlp_caption_fallback(vid, language)
+                    return direct_caption_fallback(vid, language)
                 except Exception:
-                    raise HTTPException(404, 'No accessible transcript was found. Check the URL, captions, or try an authorised local audio file.')
+                    try:
+                        return ytdlp_caption_fallback(vid, language)
+                    except Exception:
+                        raise HTTPException(404, 'No accessible transcript was found. Check the URL, captions, or try an authorised local audio file.')
 
 @app.post('/api/extract')
 def extract(req: ExtractRequest):
