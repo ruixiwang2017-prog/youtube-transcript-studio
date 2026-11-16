@@ -71,7 +71,16 @@ def direct_caption_fallback(vid: str, language: str):
 
 def ytdlp_caption_fallback(vid: str, language: str):
     if not yt_dlp: raise RuntimeError('yt-dlp is unavailable')
-    with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True, 'noplaylist': True}) as ydl:
+    # The default web client increasingly requires a PO token on hosted IPs.
+    # Android still exposes caption tracks without requiring a user session.
+    options = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'noplaylist': True,
+        'extractor_args': {'youtube': {'player_client': ['android']}},
+    }
+    with yt_dlp.YoutubeDL(options) as ydl:
         info = ydl.extract_info(f'https://www.youtube.com/watch?v={vid}', download=False)
     tracks = info.get('subtitles') or info.get('automatic_captions') or {}
     keys = list(tracks)
