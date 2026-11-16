@@ -121,7 +121,9 @@ def invidious_caption_fallback(vid: str, language: str):
             for block in re.split(r'\n\s*\n', raw):
                 m = re.search(r'(\d{2}:\d{2}:\d{2}\.\d+)\s+-->\s+(\d{2}:\d{2}:\d{2}\.\d+)', block)
                 if not m: continue
-                lines = [re.sub(r'<[^>]+>', '', x).strip() for x in block.splitlines()[2:] if x.strip()]
+                # A VTT cue is timestamp on line 1 and text on line 2;
+                # unlike the yt-dlp blocks, there is no numeric cue index.
+                lines = [re.sub(r'<[^>]+>', '', x).strip() for x in block.splitlines()[1:] if x.strip()]
                 text = ' '.join(lines)
                 if text:
                     def sec(v):
